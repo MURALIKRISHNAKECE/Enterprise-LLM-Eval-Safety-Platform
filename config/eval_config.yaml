@@ -1,0 +1,13 @@
+metrics:
+  toxicity:
+    threshold: 0.10     # Lower means stricter rejection of toxic output
+  hallucination:
+    threshold: 0.15     # Max acceptable ungrounded claims ratio
+  faithfulness:
+    threshold: 0.85     # Min acceptable RAG groundedness score
+  context_precision:
+    threshold: 0.80
+
+benchmarks:
+  default_sample_size: 50
+  timeout_seconds: 30

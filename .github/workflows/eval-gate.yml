@@ -1,0 +1,81 @@
+name: LLM Evaluation Quality Gate
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main]
+
+jobs:
+  eval-quality-gate:
+    name: Run Golden Dataset Evaluation Gate
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgrespassword
+          POSTGRES_DB: llm_eval_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      DATABASE_URL: postgresql+asyncpg://postgres:postgrespassword@localhost:5432/llm_eval_db
+      DEFAULT_EVAL_MODEL: gemini-2.0-flash-lite
+      MODEL_VERSION: ${{ github.sha }}
+      PROMPT_VERSION: v1
+      JWT_SECRET_KEY: ci-secret-key-change-in-production
+      MOCK_EVALUATORS: "true"
+      PII_POLICY: block
+      TRACE_SAMPLE_RATE: "0.0"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Wait for PostgreSQL
+        run: |
+          until pg_isready -h localhost -p 5432; do sleep 1; done
+
+      - name: Start FastAPI backend
+        run: |
+          uvicorn src.main:app --host 0.0.0.0 --port 8000 &
+          sleep 5
+          curl -f http://localhost:8000/health || exit 1
+
+      - name: Run unit tests
+        run: python -m pytest tests/ -v --tb=short --ignore=tests/load_test.py
+
+      - name: Run golden dataset evaluation gate
+        env:
+          EVAL_API_URL: http://localhost:8000/api/v1/eval/golden-run
+          EVAL_API_KEY: ""
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python ci/run_eval_gate.py
+
+      - name: Upload evaluation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report-${{ github.sha }}
+          path: ci/eval_report.json
